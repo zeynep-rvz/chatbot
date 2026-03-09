@@ -5,66 +5,92 @@ from google.oauth2.service_account import Credentials
 import json
 from datetime import datetime
 
-# Sayfa Ayarları
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="MEB Ders Planı Asistanı", page_icon="📚")
 
 st.title("📚 MEB Uyumlu Ders Planı ve Etkinlik Botu")
-st.markdown("Öğretmenler için zaman kazandıran asistan! Haftanın kazanımını girin, içerik hazır olsun ve otomatik olarak Google E-Tablolar'a kaydedilsin.")
+st.markdown("""
+Öğretmenler için zaman kazandıran asistan! Haftanın kazanımını girin; 
+içerik hazır olsun ve otomatik olarak Google E-Tablolar'a kaydedilsin.
+""")
 
-# Yan çubukta (sidebar) API Anahtarı
-st.sidebar.header("Ayarlar")
-api_key = st.sidebar.text_input("Gemini API Anahtarınızı Girin:", type="password")
+# --- API VE KİMLİK AYARLARI (SECRETS) ---
+# Streamlit Secrets'tan anahtarları güvenli bir şekilde çekiyoruz
+try:
+    # Gemini API Anahtarı
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    
+    # Google Sheets Kimlik Bilgileri (JSON formatında sakladığımız)
+    google_secrets = json.loads(st.secrets["google_credentials"])
+    
+    st.sidebar.success("✅ Sistem Bağlantıları Hazır")
+except Exception as e:
+    st.sidebar.error("⚠️ Ayarlar eksik! Secrets kısmını kontrol edin.")
+    st.stop() # Ayarlar eksikse uygulamayı durdur
 
-# Kullanıcıdan kazanım alma
-kazanim = st.text_input("Bu Haftanın Kazanımı Nedir?", placeholder="Örn: Dijital Etik, İklim Değişikliği...")
+# --- KULLANICI GİRİŞİ ---
+kazanim = st.text_input("Bu Haftanın Kazanımı Nedir?", placeholder="Örn: Dijital Etik, Fotosentez, Madde ve Isı...")
 
 if st.button("Ders İçeriğini Hazırla", type="primary"):
-    if not api_key:
-        st.warning("Lütfen sol menüden Gemini API anahtarınızı girin.")
-    elif not kazanim:
+    if not kazanim:
         st.warning("Lütfen bir ders kazanımı girin.")
     else:
-        client = genai.Client(api_key=api_key)
-        prompt = f"Sen MEB müfredatına tam hakim bir öğretmensin. Şu kazanım için içerik hazırla: '{kazanim}'. Lütfen yanıtını 1. 5 Soruluk Kahoot, 2. Kısa Hikaye, 3. Çalışma Kağıdı Taslağı olarak bölümlere ayır."
+        # Gemini İstemcisi
+        client = genai.Client(api_key=GEMINI_API_KEY)
         
-        with st.spinner("İçerik hazırlanıyor ve tablonuza kaydediliyor..."):
+        # Yapay Zeka Komutu (Prompt)
+        prompt = f"""
+        Sen MEB müfredatına tam hakim, uzman bir öğretmensin. 
+        Lütfen şu kazanım için bir içerik hazırla: '{kazanim}'
+        
+        Yanıtını şu 3 başlık altında düzenle:
+        1. 5 Soruluk Kahoot Bilgi Yarışması (Şıklar ve cevap anahtarı dahil)
+        2. Derste anlatılacak kısa bir hikaye veya vaka analizi
+        3. Öğrenciler için bir çalışma kağıdı taslağı
+        """
+        
+        with st.spinner("Yapay zeka içeriği hazırlıyor ve tabloya kaydediyor..."):
             try:
-                # 1. Gemini'dan içeriği al
+                # 1. Gemini'dan içerik üretimi
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.0-flash', # En güncel ve hızlı model
                     contents=prompt,
                 )
-                icerik = response.text
+                icerik_metni = response.text
                 
-                # Ekrana yazdır
-                st.success("İçerik başarıyla oluşturuldu!")
+                # Ekranda Göster
+                st.success("İçerik Başarıyla Oluşturuldu!")
                 st.markdown("---")
-                st.markdown(icerik)
+                st.markdown(icerik_metni)
                 
-                # 2. Google Sheets'e Kaydetme İşlemi
+                # 2. Google Sheets'e Kaydetme
                 try:
-                    # Streamlit Secrets'tan (O kilitli kasadan) anahtarı alıyoruz
-                    krediler_dict = json.loads(st.secrets["google_credentials"])
+                    # Google Yetkilendirme
+                    scopes = [
+                        'https://www.googleapis.com/auth/spreadsheets',
+                        'https://www.googleapis.com/auth/drive'
+                    ]
+                    creds = Credentials.from_service_account_info(google_secrets, scopes=scopes)
+                    gc = gspread.authorize(creds)
                     
-                    # Google'a giriş yapıyoruz
-                    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-                    credentials = Credentials.from_service_account_info(krediler_dict, scopes=scopes)
-                    gc = gspread.authorize(credentials)
-                    
-                    # Tabloyu bul ve aç (Adının tam olarak "Ders Planları" olduğundan emin olun)
+                    # Tabloyu aç (İsminin tam olarak "Ders Planları" olduğundan emin olun)
                     sh = gc.open("Ders Planları")
                     worksheet = sh.sheet1
                     
-                    # Verileri tabloya alt alta ekle
-                    su_an = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    worksheet.append_row([su_an, kazanim, icerik])
+                    # Kayıt bilgilerini hazırla
+                    tarih = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
                     
-                    # Sağ altta şık bir bildirim göster
-                    st.toast("✅ İçerik başarıyla Google E-Tablolar'a kaydedildi!", icon="📊")
+                    # Tabloya yeni satır ekle
+                    worksheet.append_row([tarih, kazanim, icerik_metni])
                     
-                except Exception as sheet_hata:
-                    st.error("İçerik üretildi ama tabloya bağlanırken bir sorun çıktı. Ayarları kontrol edelim.")
-                    st.code(f"Hata Detayı: {sheet_hata}")
+                    st.toast("✅ Veriler Google E-Tablo'ya kaydedildi!", icon="📊")
+                    
+                except Exception as sheet_err:
+                    st.error(f"Tabloya kaydedilirken bir hata oluştu: {sheet_err}")
+                    
+            except Exception as gen_err:
+                st.error(f"İçerik üretilirken bir hata oluştu: {gen_err}")
 
-            except Exception as e:
-                st.error(f"Yapay zeka bir hata verdi: {e}")
+# --- ALT BİLGİ ---
+st.markdown("---")
+st.caption("Bu araç Gemini AI kullanılarak öğretmenler için geliştirilmiştir.")
